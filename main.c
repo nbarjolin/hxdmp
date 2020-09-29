@@ -7,15 +7,28 @@
 
 #define eprintf(...) fprintf(stderr, __VA_ARGS__)
 
+#ifdef __MINGW32__
+#define kAnsiUnderline "\'"
+#define kAnsiReset     "\'"
+#define LLD "%I64d"
+#else
 #define kAnsiUnderline "\033[4m"
 #define kAnsiReset     "\033[0m"
+#define LLD "%lld"
+#endif
+
+#define k437FullBlock     "\xDB"
+#define k437DarkShade     "\xB2"
+#define k437MediumShade   "\xB1"
+#define k437LightShade    "\xB0"
 
 enum eColorMode {
+	MonoColor, // "dithered"
 	VgaColor,  // oldskool 256-color palette
 	TrueColor, // full 24-bit color
 };
 
-void printHelp() {
+void printHelp(enum eColorMode colorMode) {
 	puts("hxdmp - the no-nonsense hexdumper");
 	puts("");
 	puts("Usage:");
@@ -41,7 +54,11 @@ void printHelp() {
 	puts("        Each character of " kAnsiUnderline "layout_str" kAnsiReset " represents a column.");
 	puts("        Available column types are:");
 	puts("        a: Ascii   Each byte is printed in ascii, or '.' for non-ascii values");
-	puts("        c: Color   Each byte is printed as a █, colored according to its value");
+	if (colorMode == MonoColor) {
+		puts("        c: Color   Each byte is printed as a " k437FullBlock ", dithered according to its value");
+	} else {
+		puts("        c: Color   Each byte is printed as a █, colored according to its value");
+	}
 	puts("        x: heX     Each byte is printed as two lowercase hex digits");
 	puts("        X: heX     Each byte is printed as two uppercase hex digits");
 	puts("        The default layout string is xa for consistency with most hex editors.");
@@ -114,7 +131,7 @@ int getDefaultWidth()
 			if (parsedValue > 0) {
 				return parsedValue;
 			} else {
-				eprintf("Cannot use width of %lld from HXDMP_WIDTH, must be greater than zero.\n", parsedValue);
+				eprintf("Cannot use width of " LLD " from HXDMP_WIDTH, must be greater than zero.\n", parsedValue);
 				exit(1);
 			}
 		} else {
@@ -139,7 +156,9 @@ char const* getDefaultLayout()
 enum eColorMode determineColorSupport()
 {
 	const char* colorterm = getenv("COLORTERM");
-	if (colorterm && (!strcmp(colorterm,"truecolor") || !strcmp(colorterm,"24bit"))) {
+	if (!colorterm) {
+		return MonoColor;
+	} else if (!strcmp(colorterm,"truecolor") || !strcmp(colorterm,"24bit")) {
 		return TrueColor;
 	} else {
 		return VgaColor;
@@ -177,7 +196,7 @@ int main(int argc, char** argv)
 					if (result > 0) {
 						width = result;
 					} else {
-						eprintf("Cannot use width of %lld from --width, must be greater than zero.\n", result);
+						eprintf("Cannot use width of " LLD " from --width, must be greater than zero.\n", result);
 						exit(1);
 					}
 				} else {
@@ -215,14 +234,14 @@ int main(int argc, char** argv)
 				}
 				break;
 			case 'h':
-				printHelp();
+				printHelp(colorMode);
 				return 0;
 		}
 	}
 	
 	// if we don't have a file to read, print help and exit
 	if (optind >= argc) {
-		printHelp();
+		printHelp(colorMode);
 		return 1;
 	}
 
@@ -249,7 +268,7 @@ int main(int argc, char** argv)
 		if (bytesRead == 0) {
 			break;
 		}
-		printf("%08lx |", rowAddress);
+		printf("%08lx |", (unsigned long)rowAddress);
 		for (unsigned int l = 0; l < strlen(layout); ++l) {
 			switch (layout[l]) {
 				case 'x':
@@ -289,19 +308,35 @@ int main(int argc, char** argv)
 					printf(" ");
 					for (int i = 0; i < width; ++i) {
 						if (i < bytesRead) {
-							if (i == 0 || rowBuffer[i] != rowBuffer[i-1]) {
-								if (colorMode == TrueColor) {
-									printf("\x1b[38;2;%d;%d;%dm", rowBuffer[i], rowBuffer[i], rowBuffer[i]);
-								} else if (colorMode == VgaColor) {
-									printf("\x1b[38;5;%dm", 232+rowBuffer[i]/11);
+							if (colorMode == MonoColor) {
+								if (rowBuffer[i] > (4*255U/5)) {
+									printf(k437FullBlock);
+								} else if (rowBuffer[i] > (3*255U/5)) {
+									printf(k437DarkShade);
+								} else if (rowBuffer[i] > (2*255U/5)) {
+									printf(k437MediumShade);
+								} else if (rowBuffer[i] > (255U/5)) {
+									printf(k437LightShade);
+								} else {
+									printf(" ");
 								}
+							} else {
+								if (i == 0 || rowBuffer[i] != rowBuffer[i-1]) {
+									if (colorMode == TrueColor) {
+										printf("\x1b[38;2;%d;%d;%dm", rowBuffer[i], rowBuffer[i], rowBuffer[i]);
+									} else if (colorMode == VgaColor) {
+										printf("\x1b[38;5;%dm", 232+rowBuffer[i]/11);
+									}
+								}
+								printf("█");
 							}
-							printf("█");
 						} else {
 							printf(" ");
 						}
 					}
-					printf("\x1b[0m");
+					if (colorMode != MonoColor) {
+						printf("\x1b[0m");
+					}
 					printf(" |");
 					break;
 			}
